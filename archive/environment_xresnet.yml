@@ -1,0 +1,35 @@
+name: ecg_xresnet_env
+channels:
+  - pytorch
+  - fastai
+  - conda-forge
+  - defaults
+dependencies:
+  # Core Python
+  - python=3.8
+  
+  # Deep Learning Frameworks
+  - pytorch
+  - torchvision
+  - cudatoolkit
+  - fastai
+  
+  # ECG-spezifische Bibliotheken
+  - wfdb
+  
+  # Wissenschaftliche Computing
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  
+  # Utilities
+  - tqdm
+  - jupyter
+  - ipykernel
+  
+  # Pip-Dependencies
+  - pip
+  - pip:
+    - tsai
