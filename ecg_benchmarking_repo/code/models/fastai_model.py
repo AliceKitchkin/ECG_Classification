@@ -29,69 +29,74 @@ from sklearn.metrics import roc_auc_score
 #eval for early stopping
 from fastai.callback import Callback
 
+from utils.utils_edited import apply_thresholds, find_optimal_cutoff_thresholds, find_optimal_cutoff_thresholds_for_Gbeta
 
-############ COPIED FROM UTILS ############
-# from utils.utils import evaluate_experiment
 
-def challenge_metrics(y_true, y_pred, beta1=2, beta2=2, class_weights=None, single=False):
-    f_beta = 0
-    g_beta = 0
-    if single: # if evaluating single class in case of threshold-optimization
-        sample_weights = np.ones(y_true.sum(axis=1).shape)
-    else:
-        sample_weights = y_true.sum(axis=1)
-    for classi in range(y_true.shape[1]):
-        y_truei, y_predi = y_true[:,classi], y_pred[:,classi]
-        TP, FP, TN, FN = 0.,0.,0.,0.
-        for i in range(len(y_predi)):
-            sample_weight = sample_weights[i]
-            if y_truei[i]==y_predi[i]==1: 
-                TP += 1./sample_weight
-            if ((y_predi[i]==1) and (y_truei[i]!=y_predi[i])): 
-                FP += 1./sample_weight
-            if y_truei[i]==y_predi[i]==0: 
-                TN += 1./sample_weight
-            if ((y_predi[i]==0) and (y_truei[i]!=y_predi[i])): 
-                FN += 1./sample_weight 
-        f_beta_i = ((1+beta1**2)*TP)/((1+beta1**2)*TP + FP + (beta1**2)*FN)
-        g_beta_i = (TP)/(TP+FP+beta2*FN)
+# ############ COPIED FROM UTILS ############
+# # from utils.utils import evaluate_experiment
 
-        f_beta += f_beta_i
-        g_beta += g_beta_i
+# def challenge_metrics(y_true, y_pred, beta1=2, beta2=2, class_weights=None, single=False):
+#     '''
+#     Computes the PhysioNet/CinC Challenges metrics F_beta_macro and G_beta_macro.
+#     '''
+#     f_beta = 0
+#     g_beta = 0
+#     if single: # if evaluating single class in case of threshold-optimization
+#         sample_weights = np.ones(y_true.sum(axis=1).shape)
+#     else:
+#         sample_weights = y_true.sum(axis=1)
+#     for classi in range(y_true.shape[1]):
+#         y_truei, y_predi = y_true[:,classi], y_pred[:,classi]
+#         TP, FP, TN, FN = 0.,0.,0.,0.
+#         for i in range(len(y_predi)):
+#             sample_weight = sample_weights[i]
+#             if y_truei[i]==y_predi[i]==1: 
+#                 TP += 1./sample_weight
+#             if ((y_predi[i]==1) and (y_truei[i]!=y_predi[i])): 
+#                 FP += 1./sample_weight
+#             if y_truei[i]==y_predi[i]==0: 
+#                 TN += 1./sample_weight
+#             if ((y_predi[i]==0) and (y_truei[i]!=y_predi[i])): 
+#                 FN += 1./sample_weight 
+#         f_beta_i = ((1+beta1**2)*TP)/((1+beta1**2)*TP + FP + (beta1**2)*FN)
+#         g_beta_i = (TP)/(TP+FP+beta2*FN)
 
-    return {'F_beta_macro':f_beta/y_true.shape[1], 'G_beta_macro':g_beta/y_true.shape[1]}
+#         f_beta += f_beta_i
+#         g_beta += g_beta_i
 
-def apply_thresholds(preds, thresholds):
-	"""
-		apply class-wise thresholds to prediction score in order to get binary format.
-		BUT: if no score is above threshold, pick maximum. This is needed due to metric issues.
-	"""
-	tmp = []
-	for p in preds:
-		tmp_p = (p > thresholds).astype(int)
-		if np.sum(tmp_p) == 0:
-			tmp_p[np.argmax(p)] = 1
-		tmp.append(tmp_p)
-	tmp = np.array(tmp)
-	return tmp
+#     return {'F_beta_macro':f_beta/y_true.shape[1], 'G_beta_macro':g_beta/y_true.shape[1]}
 
-def evaluate_experiment(y_true, y_pred, thresholds=None):
-    results = {}
+# def apply_thresholds(preds, thresholds):
+# 	"""
+# 		apply class-wise thresholds to prediction score in order to get binary format.
+# 		BUT: if no score is above threshold, pick maximum. This is needed due to metric issues.
+# 	"""
+# 	tmp = []
+# 	for p in preds:
+# 		tmp_p = (p > thresholds).astype(int)
+# 		if np.sum(tmp_p) == 0:
+# 			tmp_p[np.argmax(p)] = 1
+# 		tmp.append(tmp_p)
+# 	tmp = np.array(tmp)
+# 	return tmp
 
-    if not thresholds is None:
-        # binary predictions
-        y_pred_binary = apply_thresholds(y_pred, thresholds)
-        # PhysioNet/CinC Challenges metrics
-        challenge_scores = challenge_metrics(y_true, y_pred_binary, beta1=2, beta2=2)
-        results['F_beta_macro'] = challenge_scores['F_beta_macro']
-        results['G_beta_macro'] = challenge_scores['G_beta_macro']
+# def evaluate_experiment(y_true, y_pred, thresholds=None):
+#     results = {}
 
-    # label based metric
-    results['macro_auc'] = roc_auc_score(y_true, y_pred, average='macro')
+#     if not thresholds is None:
+#         # binary predictions
+#         y_pred_binary = apply_thresholds(y_pred, thresholds)
+#         # PhysioNet/CinC Challenges metrics
+#         challenge_scores = challenge_metrics(y_true, y_pred_binary, beta1=2, beta2=2)
+#         results['F_beta_macro'] = challenge_scores['F_beta_macro']
+#         results['G_beta_macro'] = challenge_scores['G_beta_macro']
+
+#     # label based metric
+#     results['macro_auc'] = roc_auc_score(y_true, y_pred, average='macro')
     
-    df_result = pd.DataFrame(results, index=[0])
-    return df_result
-############ COPIED FROM UTILS ############
+#     df_result = pd.DataFrame(results, index=[0])
+#     return df_result
+# ############ COPIED FROM UTILS ############
 
 
 class metric_func(Callback):
@@ -222,7 +227,11 @@ def losses_plot(learner, path, filename="losses", last:int=None):
     plt.switch_backend(backend_old)
 
 class fastai_model(ClassificationModel):
-    def __init__(self,name,n_classes,freq,outputfolder,input_shape,pretrained=False,input_size=2.5,input_channels=12,chunkify_train=False,chunkify_valid=True,bs=128,ps_head=0.5,lin_ftrs_head=[128],wd=1e-2,epochs=50,lr=1e-2,kernel_size=5,loss="binary_cross_entropy",pretrainedfolder=None,n_classes_pretrained=None,gradual_unfreezing=True,discriminative_lrs=True,epochs_finetuning=30,early_stopping=None,aggregate_fn="max",concat_train_val=False):
+    def __init__(self,name,n_classes,freq,outputfolder,input_shape,pretrained=False,input_size=2.5,input_channels=12,
+                 chunkify_train=False,chunkify_valid=True,bs=128,ps_head=0.5,lin_ftrs_head=[128],wd=1e-2,epochs=50,
+                 lr=1e-2,kernel_size=5,loss="binary_cross_entropy",pretrainedfolder=None,n_classes_pretrained=None,
+                 gradual_unfreezing=True,discriminative_lrs=True,epochs_finetuning=30,early_stopping=None,
+                 aggregate_fn="max",concat_train_val=False,threshold_method="gbeta"):
         super().__init__()
         
         self.name = name
@@ -271,6 +280,9 @@ class fastai_model(ClassificationModel):
         self.early_stopping = early_stopping
         self.aggregate_fn = aggregate_fn
         self.concat_train_val = concat_train_val
+
+        self.threshold_method = threshold_method
+        self._optimized_thresholds = None
 
     def fit(self, X_train, y_train, X_val, y_val):
         #convert everything to float32
@@ -351,7 +363,26 @@ class fastai_model(ClassificationModel):
 
         learn.save(self.name) #even for early stopping the best model will have been loaded again
     
-    def predict(self, X):
+    def optimize_thresholds(self, y_true, y_pred):
+        """Optimiert Thresholds basierend auf Trainings-/Validierungsdaten"""        
+        if self.threshold_method == "gbeta":
+            self._optimized_thresholds = find_optimal_cutoff_thresholds_for_Gbeta(y_true, y_pred)
+        
+        elif self.threshold_method == 'use_gbeta_show_all':
+            self._optimized_thresholds = find_optimal_cutoff_thresholds_for_Gbeta(y_true, y_pred)
+            optimized_thresholds_max_recall = find_optimal_cutoff_thresholds(y_true, y_pred, "max_recall")
+            optimized_thresholds_recall_focused = find_optimal_cutoff_thresholds(y_true, y_pred, "recall_focused")
+
+        else:
+            self._optimized_thresholds = find_optimal_cutoff_thresholds(y_true, y_pred, self.threshold_method)
+        
+        print(f"Optimized thresholds using {self.threshold_method}: {[f'{t:.3f}' for t in self._optimized_thresholds]}")
+        print(f"Optimized thresholds using max_recall: {[f'{t:.3f}' for t in optimized_thresholds_max_recall]}")
+        print(f"Optimized thresholds using recall_focused: {[f'{t:.3f}' for t in optimized_thresholds_recall_focused]}")
+        
+        return self._optimized_thresholds
+    
+    def predict(self, X, apply_thresholds=False, thresholds=None):
         X = [l.astype(np.float32) for l in X]
         y_dummy = [np.ones(self.num_classes,dtype=np.float32) for _ in range(len(X))]
         
@@ -363,7 +394,18 @@ class fastai_model(ClassificationModel):
         
         idmap=learn.data.valid_ds.get_id_mapping()
 
-        return aggregate_predictions(preds,idmap=idmap,aggregate_fn = np.mean if self.aggregate_fn=="mean" else np.amax)  
+        aggregated_preds = aggregate_predictions(preds, idmap=idmap, 
+                                                 aggregate_fn=np.mean if self.aggregate_fn=="mean" else np.amax)
+
+        # Optional: Thresholds anwenden
+        if apply_thresholds:
+            if thresholds is not None:
+                return apply_thresholds(aggregated_preds, thresholds)
+            elif self._optimized_thresholds is not None:
+                return apply_thresholds(aggregated_preds, self._optimized_thresholds)
+            else:
+                print("Warning: No thresholds available. Use optimize_thresholds() first.")
+        return aggregated_preds
         
     def _get_learner(self, X_train,y_train,X_val,y_val,num_classes=None):
         df_train = pd.DataFrame({"data":range(len(X_train)),"label":y_train})

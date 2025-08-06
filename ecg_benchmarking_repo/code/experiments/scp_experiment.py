@@ -11,7 +11,9 @@ class SCP_Experiment():
         Experiment on SCP-ECG statements. All experiments based on SCP are performed and evaluated the same way.
     '''
 
-    def __init__(self, experiment_name, task, datafolder, outputfolder, models, sampling_frequency=100, min_samples=0, train_fold=8, val_fold=9, test_fold=10, folds_type='strat'):
+    def __init__(self, experiment_name, task, datafolder, outputfolder, models, sampling_frequency=100,
+                 min_samples=0, train_fold=8, val_fold=9, test_fold=10, folds_type='strat',
+                 optimize_thresholds=False, threshold_method="max_recall", target_label=None):
         self.models = models
         self.min_samples = min_samples
         self.task = task
@@ -23,6 +25,9 @@ class SCP_Experiment():
         self.outputfolder = outputfolder
         self.datafolder = datafolder
         self.sampling_frequency = sampling_frequency
+        self.optimize_thresholds = optimize_thresholds
+        self.threshold_method = threshold_method
+        self.target_label = target_label
 
         # create folder structure if needed
         if not os.path.exists(self.outputfolder+self.experiment_name):
@@ -137,6 +142,16 @@ class SCP_Experiment():
         np.array(ensemble_val).mean(axis=0).dump(ensemblepath + 'y_val_pred.npy')
 
     def evaluate(self, n_bootstraping_samples=100, n_jobs=20, bootstrap_eval=False, dumped_bootstraps=True):
+        '''
+        This Function evaluates all models fitted so far on the test set.
+        1. It loads the labels and predictions for the test set.
+        2. It generates bootstrap samples for the test set if bootstrap_eval is True.
+        3. It iterates over all models and computes the results for each model.
+        4. It saves the results in the respective model folder.
+        5. If optimize_thresholds is True, it computes classwise thresholds.
+        6. It uses multiprocessing to speed up the evaluation process.
+        7. te_df contains the results for the test set, which are saved in a CSV file.
+        '''
 
         # get labels
         y_train = np.load(self.outputfolder+self.experiment_name+'/data/y_train.npy', allow_pickle=True)
@@ -175,6 +190,14 @@ class SCP_Experiment():
             if self.experiment_name == 'exp_ICBEB':
                 # compute classwise thresholds such that recall-focused Gbeta is optimized
                 thresholds = utils_edited.find_optimal_cutoff_thresholds_for_Gbeta(y_train, y_train_pred)
+
+            ##### EDITED BY ALICE #####
+            elif self.experiment_name.startswith('exp'): # and hasattr(self, 'optimize_thresholds') and self.optimize_thresholds:
+                print(f"Optimizing thresholds for {self.experiment_name} using {self.threshold_method}")
+                thresholds = utils_edited.find_optimal_cutoff_thresholds_for_Gbeta(y_train, y_train_pred)
+                #thresholds = utils_edited.find_optimal_cutoff_thresholds(y_train, y_train_pred, self.threshold_method)
+            ##### EDITED BY ALICE #####
+
             else:
                 thresholds = None
 

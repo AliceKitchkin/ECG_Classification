@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 import wfdb
 import ast
-from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.metrics import roc_auc_score, roc_curve, precision_recall_curve
 from sklearn.preprocessing import StandardScaler, MultiLabelBinarizer
 
 
@@ -40,22 +40,21 @@ def evaluate_experiment(y_true, y_pred, thresholds=None):
     df_result = pd.DataFrame(results, index=[0])
     return df_result
 
+
 def challenge_metrics(y_true, y_pred, beta1=2, beta2=2, single=False):
     f_beta = 0
     g_beta = 0
-    TP, FP, TN, FN = 0., 0., 0., 0.
-    Accuracy = 0
-    Precision = 0
-    Recall = 0
-    F1 = 0
+    TP_total, FP_total, TN_total, FN_total = 0., 0., 0., 0.
 
     if single:  # if evaluating single class in case of threshold-optimization
         sample_weights = np.ones(y_true.sum(axis=1).shape)
     else:
         sample_weights = y_true.sum(axis=1)
+    
     for classi in range(y_true.shape[1]):
         y_truei, y_predi = y_true[:, classi], y_pred[:, classi]
         TP, FP, TN, FN = 0., 0., 0., 0.
+        
         for i in range(len(y_predi)):
             sample_weight = sample_weights[i]
             if y_truei[i] == y_predi[i] == 1:
@@ -66,20 +65,29 @@ def challenge_metrics(y_true, y_pred, beta1=2, beta2=2, single=False):
                 TN += 1. / sample_weight
             if (y_predi[i] == 0) and (y_truei[i] != y_predi[i]):
                 FN += 1. / sample_weight
+        
+        # Class-wise metrics for f_beta and g_beta
         f_beta_i = ((1 + beta1 ** 2) * TP) / ((1 + beta1 ** 2) * TP + FP + (beta1 ** 2) * FN)
         g_beta_i = TP / (TP + FP + beta2 * FN)
 
         f_beta += f_beta_i
         g_beta += g_beta_i
+        
+        # Accumulate totals across all classes
+        TP_total += TP
+        FP_total += FP
+        TN_total += TN
+        FN_total += FN
 
-        Accuracy = (TP + TN) / (FP + TP + TN + FN)
-        # Precision = TP / (TP + FP)
-        # Recall = TP / (TP + FN)
-        # F1 =  2*(Precision * Recall) / (Precision + Recall)
-        F1 = 2 * TP / 2 * TP + FP + FN
+    # Calculate overall metrics using totals
+    Accuracy = (TP_total + TN_total) / (TP_total + FP_total + TN_total + FN_total) if (TP_total + FP_total + TN_total + FN_total) > 0 else 0
+    Precision = TP_total / (TP_total + FP_total) if (TP_total + FP_total) > 0 else 0
+    Recall = TP_total / (TP_total + FN_total) if (TP_total + FN_total) > 0 else 0
+    F1 = 2 * TP_total / (2 * TP_total + FP_total + FN_total) if (2 * TP_total + FP_total + FN_total) > 0 else 0
 
-    return {'F_beta_macro': f_beta / y_true.shape[1], 'G_beta_macro': g_beta / y_true.shape[1], 'TP': TP, 'FP': FP,
-            'TN': TN, 'FN': FN, 'Accuracy': Accuracy, 'F1': F1, 'Precision': Precision, 'Recall': Recall}
+    return {'F_beta_macro': f_beta / y_true.shape[1], 'G_beta_macro': g_beta / y_true.shape[1], 
+            'TP': TP_total, 'FP': FP_total, 'TN': TN_total, 'FN': FN_total, 
+            'Accuracy': Accuracy, 'F1': F1, 'Precision': Precision, 'Recall': Recall}
 
 
 def get_appropriate_bootstrap_samples(y_true, n_bootstraping_samples):
@@ -93,21 +101,74 @@ def get_appropriate_bootstrap_samples(y_true, n_bootstraping_samples):
     return samples
 
 
-def find_optimal_cutoff_threshold(target, predicted):
-    """
-    Find the optimal probability cutoff point for a classification model related to event rate
-    """
-    fpr, tpr, threshold = roc_curve(target, predicted)
-    optimal_idx = np.argmax(tpr - fpr)
-    optimal_threshold = threshold[optimal_idx]
+def find_optimal_cutoff_threshold(target, predicted, optimization_target):
+    '''
+    Find the optimal probability cutoff point for one class in a binary classification problem.
+
+    optimization_target options:
+    - "max_recall": maximizes Recall (same as minimizing False Negatives)
+    - "recall_focused": uses precision-recall curve to optimize recall, focusing on F2-score
+    - "youden": maximizes TPR - FPR (original)
+    '''
+
+    ### ORIGINAL CODE ###
+    # fpr, tpr, threshold = roc_curve(target, predicted)
+    # optimal_idx = np.argmax(tpr - fpr)
+    # optimal_threshold = threshold[optimal_idx]
+    ### original code ###
+
+    ### EDITED BY ALICE ###
+    fpr, tpr, thresholds = roc_curve(target, predicted)
+
+    if optimization_target == "max_recall":
+        optimal_idx = np.argmax(tpr)
+        optimal_threshold = thresholds[optimal_idx]
+
+    elif optimization_target == "recall_focused":
+
+        target_recall = 0.90
+        # This finds all threshold indices where the True Positive Rate (TPR/Recall) is at least 90%.
+        high_recall_indices = np.where(tpr >= target_recall)[0]
+        
+        # If thresholds exist that achieve ≥90% recall:
+        if len(high_recall_indices) > 0:
+            # Choose first index (highest threshold)
+            optimal_idx = high_recall_indices[0]
+
+        # Fallback: If no threshold can achieve 90% recall:
+        else:
+            # Maximum possible recall
+            optimal_idx = np.argmax(tpr)
+        
+        optimal_threshold = thresholds[optimal_idx]
+        
+        # Prevents extremely low thresholds (below 0.01)
+        # which could lead to too many false positives
+        optimal_threshold = max(optimal_threshold, 0.01)
+
+    else: # default: youden
+        optimal_idx = np.argmax(tpr - fpr)
+        optimal_threshold = thresholds[optimal_idx]
+    ### EDITED BY ALICE ###
+
     return optimal_threshold
 
 
-def find_optimal_cutoff_thresholds(y_true, y_pred):
-    return [find_optimal_cutoff_threshold(y_true[:, i], y_pred[:, i]) for i in range(y_true.shape[1])]
+def find_optimal_cutoff_thresholds(y_true, y_pred, optimization_target):
+    '''
+    Find the optimal probability cutoff point for each class in a multi-label classification problem.
+    '''
+    ### Original code ###
+    #return [find_optimal_cutoff_threshold(y_true[:, i], y_pred[:, i]) for i in range(y_true.shape[1])]
+
+    return [find_optimal_cutoff_threshold(y_true[:, i], y_pred[:, i], optimization_target) 
+        for i in range(y_true.shape[1])]
 
 
 def find_optimal_cutoff_threshold_for_Gbeta(target, predicted, n_thresholds=100):
+    '''
+    Find the optimal probability cutoff point for one class in a binary classification problem.
+    '''
     thresholds = np.linspace(0.00, 1, n_thresholds)
     scores = [challenge_metrics(target, predicted > t, single=True)['G_beta_macro'] for t in thresholds]
     optimal_idx = np.argmax(scores)
@@ -115,6 +176,9 @@ def find_optimal_cutoff_threshold_for_Gbeta(target, predicted, n_thresholds=100)
 
 
 def find_optimal_cutoff_thresholds_for_Gbeta(y_true, y_pred):
+    '''
+    Find the optimal probability cutoff point for each class in a multi-label classification problem.
+    '''
     print("optimize thresholds with respect to G_beta")
     return [
         find_optimal_cutoff_threshold_for_Gbeta(y_true[:, k][:, np.newaxis], y_pred[:, k][:, np.newaxis])
@@ -127,10 +191,21 @@ def apply_thresholds(preds, thresholds):
         BUT: if no score is above threshold, pick maximum. This is needed due to metric issues.
     """
     tmp = []
+
+    # for every prediction in array of predictions probabilities
     for p in preds:
+
+        # For each sample, it compares the prediction scores against the
+        # corresponding class thresholds and converts to binary
+        # (1 if above threshold, 0 if below).
         tmp_p = (p > thresholds).astype(int)
+        
+        # Critical feature: If no prediction scores exceed their respective
+        # thresholds (all predictions would be 0), it forces the class with
+        # the highest probability to be predicted as positive (1)
         if np.sum(tmp_p) == 0:
             tmp_p[np.argmax(p)] = 1
+
         tmp.append(tmp_p)
     tmp = np.array(tmp)
     return tmp
