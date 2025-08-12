@@ -41,7 +41,7 @@ def evaluate_experiment(y_true, y_pred, thresholds=None):
     return df_result
 
 
-def challenge_metrics(y_true, y_pred, beta1=2, beta2=2, single=False):
+def challenge_metrics(y_true, y_pred, beta1=2, beta2=2, single=False, norm_class_idx=0, swap_fp_fn_for_norm=False):
     f_beta = 0
     g_beta = 0
     TP_total, FP_total, TN_total, FN_total = 0., 0., 0., 0.
@@ -68,7 +68,14 @@ def challenge_metrics(y_true, y_pred, beta1=2, beta2=2, single=False):
         
         # Class-wise metrics for f_beta and g_beta
         f_beta_i = ((1 + beta1 ** 2) * TP) / ((1 + beta1 ** 2) * TP + FP + (beta1 ** 2) * FN)
-        g_beta_i = TP / (TP + FP + beta2 * FN)
+        
+        # Spezielle Behandlung für spezifizierte Klassen: FP und FN vertauschen
+        if swap_fp_fn_for_norm and classi == norm_class_idx:
+            # Für NORM: Fokus auf False Positives statt False Negatives
+            g_beta_i = TP / (TP + beta2 * FP + FN)
+        else:
+            # Standard G-beta für alle anderen Klassen
+            g_beta_i = TP / (TP + FP + beta2 * FN)
 
         f_beta += f_beta_i
         g_beta += g_beta_i
@@ -145,6 +152,30 @@ def find_optimal_cutoff_threshold(target, predicted, optimization_target):
         # Prevents extremely low thresholds (below 0.01)
         # which could lead to too many false positives
         optimal_threshold = max(optimal_threshold, 0.01)
+
+    elif optimization_target == 'precision_focused':
+        # Use challenge_metrics with FP-focused G-beta for NORM class
+        n_thresholds = 100
+        threshold_range = np.linspace(0.00, 1, n_thresholds)
+
+        scores = []
+        for t in threshold_range:
+            y_pred_binary = (predicted > t).astype(int)
+
+            # Konvertiere 1D-Arrays zu 2D für challenge_metrics (füge newaxis hinzu)
+            target_2d = target[:, np.newaxis] if target.ndim == 1 else target
+            y_pred_binary_2d = y_pred_binary[:, np.newaxis] if y_pred_binary.ndim == 1 else y_pred_binary
+            
+            # Verwende challenge_metrics mit angepasster G-beta Formel
+            # norm_class_idx=0 da wir hier nur eine Klasse betrachten
+            score = challenge_metrics(target_2d, y_pred_binary_2d, 
+                                      single=True, 
+                                      norm_class_idx=0,  # In Einzelklassen-Betrachtung immer 0
+                                      swap_fp_fn_for_norm=True)['G_beta_macro']
+            scores.append(score)
+        
+        optimal_idx = np.argmax(scores)
+        optimal_threshold = threshold_range[optimal_idx]
 
     else: # default: youden
         optimal_idx = np.argmax(tpr - fpr)
