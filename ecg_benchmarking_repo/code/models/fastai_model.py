@@ -230,8 +230,8 @@ class fastai_model(ClassificationModel):
     def __init__(self,name,n_classes,freq,outputfolder,input_shape,pretrained=False,input_size=2.5,input_channels=12,
                  chunkify_train=False,chunkify_valid=True,bs=128,ps_head=0.5,lin_ftrs_head=[128],wd=1e-2,epochs=50,
                  lr=1e-2,kernel_size=5,loss="binary_cross_entropy",pretrainedfolder=None,n_classes_pretrained=None,
-                 gradual_unfreezing=True,discriminative_lrs=True,epochs_finetuning=30,early_stopping=None,
-                 aggregate_fn="max",concat_train_val=False,threshold_method="gbeta"):
+                 gradual_unfreezing=True, discriminative_lrs=True, epochs_finetuning=30, early_stopping=None,
+                 aggregate_fn="max", concat_train_val=False, threshold_method="gbeta", precision_classes=None):
         super().__init__()
         
         self.name = name
@@ -283,6 +283,7 @@ class fastai_model(ClassificationModel):
 
         self.threshold_method = threshold_method
         self._optimized_thresholds = None
+        self.precision_classes = precision_classes if precision_classes is not None else []
 
     def fit(self, X_train, y_train, X_val, y_val):
         #convert everything to float32
@@ -364,21 +365,41 @@ class fastai_model(ClassificationModel):
         learn.save(self.name) #even for early stopping the best model will have been loaded again
     
     def optimize_thresholds(self, y_true, y_pred):
-        """Optimiert Thresholds basierend auf Trainings-/Validierungsdaten"""        
+        '''
+        Optimized thresholds based on training/validation data
+        '''
         if self.threshold_method == "gbeta":
             self._optimized_thresholds = find_optimal_cutoff_thresholds_for_Gbeta(y_true, y_pred)
         
-        elif self.threshold_method == 'use_gbeta_show_all':
+        elif self.threshold_method == 'hybrid_thresholds': # Hybride Optimierung: Gbeta für alle Klassen außer NORM
+            # G-beta für alle Klassen als Basis
             self._optimized_thresholds = find_optimal_cutoff_thresholds_for_Gbeta(y_true, y_pred)
-            optimized_thresholds_max_recall = find_optimal_cutoff_thresholds(y_true, y_pred, "max_recall")
-            optimized_thresholds_recall_focused = find_optimal_cutoff_thresholds(y_true, y_pred, "recall_focused")
+
+            # Precision-fokussierte Optimierung für spezifizierte Klassen
+            if self.precision_classes:
+                precision_thresholds = find_optimal_cutoff_thresholds(y_true, y_pred, "precision_focused")
+
+                # Ersetze Thresholds für spezifizierte Klassen
+                for class_idx in self.precision_classes:
+                    if class_idx < len(self._optimized_thresholds):
+                        old_threshold = self._optimized_thresholds[class_idx]
+                        self._optimized_thresholds[class_idx] = precision_thresholds[class_idx]
+                        print(f"Class {class_idx}: threshold changed from {old_threshold:.3f} (G-beta) to {self._optimized_thresholds[class_idx]:.3f} (precision)")
+                    else:
+                        print(f"Warning: Class index {class_idx} is out of range (max: {len(self._optimized_thresholds)-1})")
+            else:
+                print("No precision classes specified - using G-beta for all classes")
 
         else:
             self._optimized_thresholds = find_optimal_cutoff_thresholds(y_true, y_pred, self.threshold_method)
         
+        # Just FYI
+        optimized_thresholds_max_recall = find_optimal_cutoff_thresholds(y_true, y_pred, "max_recall")
+        optimized_thresholds_recall_focused = find_optimal_cutoff_thresholds(y_true, y_pred, "recall_focused")
+        
         print(f"Optimized thresholds using {self.threshold_method}: {[f'{t:.3f}' for t in self._optimized_thresholds]}")
-        print(f"Optimized thresholds using max_recall: {[f'{t:.3f}' for t in optimized_thresholds_max_recall]}")
-        print(f"Optimized thresholds using recall_focused: {[f'{t:.3f}' for t in optimized_thresholds_recall_focused]}")
+        print(f"FYI: Optimized thresholds using max_recall: {[f'{t:.3f}' for t in optimized_thresholds_max_recall]}")
+        print(f"FYI: Optimized thresholds using recall_focused: {[f'{t:.3f}' for t in optimized_thresholds_recall_focused]}")
         
         return self._optimized_thresholds
     
