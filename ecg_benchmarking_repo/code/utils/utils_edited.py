@@ -245,22 +245,17 @@ def apply_thresholds(preds, thresholds):
 # DATA PROCESSING STUFF
 def load_dataset(path, sampling_rate, release=False):
     if path.split('/')[-2] == 'ptbxl':
+        print(f'Loading PTB-XL data from: {path} ptbxl_database.csv')
         # load and convert annotation data
         Y = pd.read_csv(path + 'ptbxl_database.csv', index_col='ecg_id')
         Y.scp_codes = Y.scp_codes.apply(lambda x: ast.literal_eval(x))
 
         # Load raw signal data
         X = load_raw_data_ptbxl(Y, sampling_rate, path)
-
-    elif path.split('/')[-2] == 'ICBEB':
-        # load and convert annotation data
-        Y = pd.read_csv(path + 'icbeb_database.csv', index_col='ecg_id')
-        Y.scp_codes = Y.scp_codes.apply(lambda x: ast.literal_eval(x))
-
-        # Load raw signal data
-        X = load_raw_data_icbeb(Y, sampling_rate, path)
-
-    return X, Y
+        return X, Y
+    else:
+        print(f'Error loading data')
+        return None, None
 
 
 def load_raw_data_icbeb(df, sampling_rate, path):

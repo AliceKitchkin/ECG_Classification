@@ -3,4 +3,6 @@
 # from .ig import IntegratedGradients
 # from .shapley import ShapleyValue
 
-from . import lrp
+# from . import lrp
+from .gradient import GradientExplainer
+from .gradcam import GradCAMExplainer

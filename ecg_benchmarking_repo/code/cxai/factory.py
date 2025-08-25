@@ -82,7 +82,7 @@ def make_explainer(name:str, model:torch.nn.Module):
         return explainers.gradient.GradientExplainer(model)
     
     elif 'gradcam' in name.lower():
-        return explainers.gradcam.GradCAMExplainer(model, target_layer='block4')
+        return explainers.gradcam.GradCAMExplainer(model, target_layer='7.2')
 
     raise ValueError(f"Explainer '{name}' not available for {type(model)}!")
 

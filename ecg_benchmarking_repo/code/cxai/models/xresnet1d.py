@@ -19,7 +19,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ...models.basic_conv1d import create_head1d, Flatten
+from models.basic_conv1d import create_head1d, Flatten
+
+import numpy as np
+import os
+import pickle
+from pathlib import Path
 
 from enum import Enum
 import re
@@ -229,6 +234,228 @@ def split_model_at_layer(model, layer: str):
     return feature_extractor, classification_head
 
 
+def get_transformation(model=None, standard_scaler=None):
+    """
+    Für ECG XResNet1D - gibt Standardisierungs-Transformationen zurück
+    
+    Returns:
+        tuple: (identity_transform, standardizer_transform)
+               - identity_transform: keine Änderung (für Kompatibilität)  
+               - standardizer_transform: Funktion die apply_standardizer verwendet
+    """
+    import numpy as np
+    
+    # Identity Transform (macht nichts - für Kompatibilität mit Image-Modellen)
+    def identity_transform(x):
+        return x
+    
+    # Standardizer Transform - erwartet dass standard_scaler global verfügbar ist
+    def standardizer_transform(X):
+        """
+        Anwendung des Standard Scalers auf ECG Daten
+        """
+        # 1. Versuche übergebenen Scaler
+        scaler = standard_scaler
 
-# (Optional) Liste der verfügbaren Modelle für autoimport
-__all__ = ["xresnet1d101", "split_model_at_layer", "XResNet1d", "ResBlock"]
+        # 2. Falls nicht übergeben, versuche aus __main__ ...
+
+        # 3. Deine apply_standardizer Logik
+        if X.ndim == 2:  # Einzelnes Sample
+            x_shape = X.shape
+            return scaler.transform(X.flatten()[:, np.newaxis]).reshape(x_shape)
+        elif X.ndim == 3:  # Batch
+            X_tmp = []
+            for x in X:
+                x_shape = x.shape
+                X_tmp.append(scaler.transform(x.flatten()[:, np.newaxis]).reshape(x_shape))
+            return np.array(X_tmp)
+        else:
+            raise ValueError(f"Unerwartete Input-Dimensionen: {X.shape}")
+    
+    return (identity_transform, standardizer_transform)
+
+
+
+# Füge NACH der get_transformation Funktion hinzu:
+
+class XResNet1DModel:
+    def __init__(self, model_path, experiment, class_names, num_classes=5):
+        """ECG XResNet1D Model wrapper for cxai."""
+        self.experiment = experiment
+        self.class_names = class_names
+        self.num_classes = num_classes
+        self.model_path = Path(model_path)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Model loading - improve error handling
+        self.model = self._load_model()
+        self.model.eval()
+        
+        # Hook storage for intermediate activations
+        self.hooks = {}
+        self.activations = {}
+        
+    def _load_model(self):
+        """Load the trained XResNet1D model."""
+        try:
+            # Try loading the model checkpoint
+            model_files = list(self.model_path.glob("*.pkl")) + list(self.model_path.glob("*.pth"))
+            
+            if not model_files:
+                raise FileNotFoundError(f"No model files found in {self.model_path}")
+            
+            # Load the most recent model file
+            model_file = max(model_files, key=os.path.getctime)
+            print(f"Loading model from: {model_file}")
+            
+            # Load depending on file extension
+            if str(model_file).endswith('.pkl'):
+                with open(model_file, 'rb') as f:
+                    model = pickle.load(f)
+                # Extract the actual PyTorch model if it's wrapped
+                if hasattr(model, 'model'):
+                    model = model.model
+                elif hasattr(model, 'learn'):
+                    model = model.learn.model
+            else:
+                model = torch.load(model_file, map_location=self.device)
+            
+            return model.to(self.device)
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to load model: {e}")
+    
+    def forward(self, x):
+        """Forward pass through the model."""
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32)
+        
+        if x.dim() == 2:  # (length, channels)
+            x = x.unsqueeze(0)  # Add batch dimension: (1, length, channels)
+        
+        if x.dim() == 3 and x.shape[-1] == 12:  # (batch, length, channels)
+            x = x.permute(0, 2, 1)  # -> (batch, channels, length)
+        
+        x = x.to(self.device)
+        
+        with torch.no_grad():
+            output = self.model(x)
+        
+        return output
+    
+    def predict(self, x):
+        """Predict with the model - return probabilities."""
+        logits = self.forward(x)
+        probabilities = torch.softmax(logits, dim=1)
+        return probabilities.cpu().numpy()
+    
+    def _register_hook(self, layer_name, layer):
+        """Register a forward hook for a specific layer."""
+        def hook_fn(module, input, output):
+            self.activations[layer_name] = output.detach()
+        
+        hook = layer.register_forward_hook(hook_fn)
+        self.hooks[layer_name] = hook
+        return hook
+    
+    def _remove_hooks(self):
+        """Remove all registered hooks."""
+        for hook in self.hooks.values():
+            hook.remove()
+        self.hooks.clear()
+        self.activations.clear()
+    
+    def get_intermediate_activation_and_context(self, layer, x, label=None):
+        """
+        Get intermediate activation from a specific layer.
+        
+        Args:
+            layer (str): Layer name (e.g., "0", "4", "8")
+            x (torch.Tensor): Input tensor
+            label (int): Target label (for future use)
+            
+        Returns:
+            tuple: (activation, context) where context contains relevant info
+        """
+        # Clean up previous hooks
+        self._remove_hooks()
+        
+        # Find the target layer - handle numeric indices for Sequential model
+        target_layer = None
+        if layer.isdigit():
+            # Direct index access for Sequential model
+            layer_idx = int(layer)
+            if layer_idx < len(self.model):
+                target_layer = self.model[layer_idx]
+                layer_name = f"{layer_idx}"
+            else:
+                raise ValueError(f"Layer index {layer_idx} out of range. Model has {len(self.model)} layers.")
+        else:
+            # Named layer access
+            for name, module in self.model.named_modules():
+                if name == layer:
+                    target_layer = module
+                    layer_name = name
+                    break
+        
+        if target_layer is None:
+            available_layers = [f"{i}" for i in range(len(self.model))]
+            available_named = [name for name, _ in self.model.named_modules() 
+                              if len(list(_.children())) == 0]
+            raise ValueError(f"Layer '{layer}' not found. Available indices: {available_layers[:10]}... Available named layers: {available_named[:5]}...")
+        
+        # Register hook for target layer
+        self._register_hook(layer_name, target_layer)
+        
+        # Forward pass to trigger hooks
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32)
+        
+        if x.dim() == 2:  # (length, channels)
+            x = x.unsqueeze(0)  # Add batch dimension
+        
+        if x.dim() == 3 and x.shape[-1] == 12:  # (batch, length, channels)
+            x = x.permute(0, 2, 1)  # -> (batch, channels, length)
+        
+        x = x.to(self.device)
+        
+        # Forward pass
+        with torch.no_grad():
+            output = self.model(x)
+        
+        # Get the activation
+        if layer_name not in self.activations:
+            raise RuntimeError(f"No activation captured for layer '{layer}'")
+        
+        activation = self.activations[layer_name]
+        
+        # Create context with useful information
+        context = {
+            'layer_name': layer_name,
+            'layer_type': type(target_layer).__name__,
+            'input_shape': tuple(x.shape),
+            'output_shape': tuple(output.shape),
+            'activation_shape': tuple(activation.shape),
+            'model_output': output,
+            'target_label': label
+        }
+        
+        # Clean up hooks
+        self._remove_hooks()
+        
+        return activation.cpu(), context
+    
+    def get_layer_names(self):
+        """Get all available layer names."""
+        # Return both numeric indices and named layers
+        numeric_layers = [str(i) for i in range(len(self.model))]
+        named_layers = [name for name, _ in self.model.named_modules() 
+                       if len(list(_.children())) == 0]
+        return numeric_layers + named_layers
+    
+    def __call__(self, x):
+        """Make the model callable."""
+        return self.forward(x)
+
+# Update the __all__ list
+__all__ = ["xresnet1d101", "split_model_at_layer", "XResNet1d", "ResBlock", "XResNet1DModel", "get_transformation"]

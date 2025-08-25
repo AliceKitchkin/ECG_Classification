@@ -32,7 +32,7 @@ def split_model_at_layer(
         return vgg16.split_model_at_layer(model, layer)
     elif isinstance(model, NormFreeNet):
         return nfnet.split_model_at_layer(model, layer)
-    elif isinstance(model, xresnet1d.XResNet1d):  # <-- Korrektur!
+    elif isinstance(model, xresnet1d.XResNet1d):
         return xresnet1d.split_model_at_layer(model, layer)
     else:
         raise ValueError(f"We can't split {model} at {layer}.")
